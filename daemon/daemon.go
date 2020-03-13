@@ -1031,7 +1031,7 @@ func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.S
 	}
 	d.execCommands = exec.NewStore()
 	d.idIndex = truncindex.NewTruncIndex([]string{})
-	d.statsCollector = d.newStatsCollector(1 * time.Second)
+	d.statsCollector = d.newStatsCollector(50 * time.Millisecond)
 
 	d.EventsService = events.New()
 	d.root = config.Root

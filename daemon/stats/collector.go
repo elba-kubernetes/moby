@@ -53,7 +53,7 @@ func (s *Collector) Collect(c *container.Container) chan interface{} {
 
 	publisher, exists := s.publishers[c]
 	if !exists {
-		publisher = pubsub.NewPublisher(100*time.Millisecond, 1024)
+		publisher = pubsub.NewPublisher(45*time.Millisecond, 1024)
 		s.publishers[c] = publisher
 	}
 
