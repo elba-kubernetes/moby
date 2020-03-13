@@ -6,6 +6,10 @@ import (
 	"errors"
 	"runtime"
 	"time"
+	"io"
+	"os"
+	"time"
+	"strconv"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/backend"
@@ -14,6 +18,76 @@ import (
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/pkg/ioutils"
 )
+
+const BUFFER_LENGTH = 512
+
+type BufferedWriter struct {
+	Buffer		[BUFFER_LENGTH]byte
+	N			int
+	Size		int
+	Writer		io.Writer
+}
+
+func MakeBufferedWriter(dest io.Writer) *BufferedWriter {
+	return &BufferedWriter{Writer: dest, Size: BUFFER_LENGTH}
+}
+
+func (w *BufferedWriter) Write(p []byte) (int, error) {
+	originalLength := len(p)
+	srcRemaining := originalLength
+	srcStart := 0
+	
+	// Keep writing and flushing until remaining can fit
+	for srcRemaining + w.N > w.Size {
+		copy(w.Buffer[w.N:w.Size], p[srcStart:])
+		w.Writer.Write(w.Buffer[:])
+		
+		// Flush
+		w.Buffer = [BUFFER_LENGTH]byte{}
+		copied := w.Size - w.N
+		srcRemaining -= copied
+		srcStart += copied
+		w.N = 0
+	}
+
+	copy(w.Buffer[w.N:], p[srcStart:srcStart+srcRemaining])
+	w.N += srcRemaining
+
+	return originalLength, nil
+}
+
+func (w *BufferedWriter) Flush() (int, error) {
+	dest := make([]byte, w.N)
+	originalLength := w.N
+	copy(dest, w.Buffer[:])
+	w.Writer.Write(dest)
+	w.Buffer = [BUFFER_LENGTH]byte{}
+	w.N = 0
+	
+	return originalLength, nil
+}
+
+type LoggerWriter struct {
+	Writer	io.Writer
+}
+
+func MakeLoggerWriter(dest io.Writer) *LoggerWriter {
+	return &LoggerWriter{Writer: dest}
+}
+
+func (w *LoggerWriter) Write(p []byte) (int, error) {
+	timeNano := strconv.FormatInt(time.Now().UnixNano(), 10)
+	timeLen := len(timeNano)
+	newBufferLength := timeLen + 2 + len(p) // 2 for space, and newline
+	buf := make([]byte, newBufferLength)
+	copy(buf[:], timeNano[:])
+	buf[timeLen] = 32 // space
+	buf[newBufferLength - 1] = 10 // \n
+	copy(buf[timeLen + 1:], p)
+	w.Writer.Write(buf)
+	
+	return newBufferLength, nil
+}
 
 // ContainerStats writes information about the container to the stream
 // given in the config object.
