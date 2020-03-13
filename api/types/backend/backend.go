@@ -75,7 +75,7 @@ type ContainerStatsConfig struct {
 	Stream    bool
 	OutStream io.Writer
 	Version   string
-	OutFile	  string
+	Buffer	  bool
 }
 
 // ExecInspect holds information about a running process started

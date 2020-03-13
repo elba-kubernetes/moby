@@ -126,20 +126,16 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 		return &ss
 	}
 
-	// Redirect to a buffered, timestamp-marked file
-	if len(config.OutFile) > 0 {
-		file, err = os.Open(config.OutFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err == nil {
-			// defer is LIFO
-			defer file.Close()
-			defer bufferedWriter.Flush()
-			bufferedWriter = MakeBufferedWriter(file)
-			outStream = MakeLoggerWriter(bufferedWriter)
-		}
+	// Buffer and add timestamps
+	if len(config.Buffer) > 0 {
+		// defer is LIFO
+		defer bufferedWriter.Flush()
+		bufferedWriter = MakeBufferedWriter(outStream)
+		outStream = MakeLoggerWriter(bufferedWriter)
 	}
 
 	enc := json.NewEncoder(outStream)
-	shouldStream := config.Stream || len(config.OutFile) > 0
+	shouldStream := config.Stream || config.Buffer
 
 	updates := daemon.subscribeToContainerStats(container)
 	defer daemon.unsubscribeToContainerStats(container, updates)
