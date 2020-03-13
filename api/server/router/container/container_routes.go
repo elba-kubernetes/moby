@@ -102,6 +102,7 @@ func (s *containerRouter) getContainersStats(ctx context.Context, w http.Respons
 	}
 
 	stream := httputils.BoolValueOrDefault(r, "stream", true)
+	outFile := r.FormValue(k)
 	if !stream {
 		w.Header().Set("Content-Type", "application/json")
 	}
@@ -109,6 +110,7 @@ func (s *containerRouter) getContainersStats(ctx context.Context, w http.Respons
 	config := &backend.ContainerStatsConfig{
 		Stream:    stream,
 		OutStream: w,
+		OutFile:   outFile,
 		Version:   httputils.VersionFromContext(ctx),
 	}
 
