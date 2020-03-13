@@ -128,7 +128,20 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 		return &ss
 	}
 
+	// Redirect to a buffered, timestamp-marked file
+	if len(config.OutFile) > 0 {
+		file, err = os.Open(config.OutFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err == nil {
+			// defer is LIFO
+			defer file.Close()
+			defer bufferedWriter.Flush()
+			bufferedWriter = MakeBufferedWriter(file)
+			outStream = MakeLoggerWriter(bufferedWriter)
+		}
+	}
+
 	enc := json.NewEncoder(outStream)
+	shouldStream := config.Stream || len(config.OutFile) > 0
 
 	updates := daemon.subscribeToContainerStats(container)
 	defer daemon.unsubscribeToContainerStats(container, updates)
@@ -184,7 +197,7 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 				statsJSON = statsJSONPost120
 			}
 
-			if !config.Stream && noStreamFirstFrame {
+			if !shouldStream && noStreamFirstFrame {
 				// prime the cpu stats so they aren't 0 in the final output
 				noStreamFirstFrame = false
 				continue
@@ -194,7 +207,7 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 				return err
 			}
 
-			if !config.Stream {
+			if !shouldStream {
 				return nil
 			}
 		case <-ctx.Done():
