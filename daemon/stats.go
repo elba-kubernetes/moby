@@ -57,10 +57,8 @@ func (w *BufferedWriter) Write(p []byte) (int, error) {
 }
 
 func (w *BufferedWriter) Flush() (int, error) {
-	dest := make([]byte, w.N)
 	originalLength := w.N
-	copy(dest, w.Buffer[:])
-	w.Writer.Write(dest)
+	w.Writer.Write(w.Buffer[:w.N])
 	w.Buffer = [BUFFER_LENGTH]byte{}
 	w.N = 0
 	
