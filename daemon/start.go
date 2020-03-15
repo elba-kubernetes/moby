@@ -12,7 +12,6 @@ import (
 	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/server/httputils"
 	"github.com/docker/docker/container"
-	"github.com/docker/docker/container"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/mount"
 	"github.com/pkg/errors"
@@ -226,18 +225,18 @@ func (daemon *Daemon) containerStart(container *container.Container, checkpoint 
 	daemon.LogContainerEvent(container, "start")
 	containerActions.WithValues("start").UpdateSince(start)
 	
-	go func{
+	go func() {
 		folderpath := "/var/logs/docker/stats"
 		err := os.MkdirAll(folderpath, os.ModePerm)
-		targetFilepath = filepath.Join(folderpath, container.ID + ".log")
-		file, err := os.Open(targetFilepath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		targetFilepath := filepath.Join(folderpath, container.ID + ".log")
+		file, err := os.OpenFile(targetFilepath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err == nil {
 			defer file.Close()
 			config := &backend.ContainerStatsConfig{
 				Stream:    true,
 				OutStream: file,
 				Buffer:    true,
-				Version:   httputils.VersionFromContext(ctx)
+				Version:   httputils.VersionFromContext(ctx),
 			}
 			daemon.ContainerStats(ctx, container.ID, config)
 		}

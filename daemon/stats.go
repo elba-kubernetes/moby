@@ -7,8 +7,6 @@ import (
 	"runtime"
 	"time"
 	"io"
-	"os"
-	"time"
 	"strconv"
 
 	"github.com/docker/docker/api/types"
@@ -127,10 +125,9 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 	}
 
 	// Buffer and add timestamps
-	if len(config.Buffer) > 0 {
-		// defer is LIFO
+	if config.Buffer {
+		bufferedWriter := MakeBufferedWriter(outStream)
 		defer bufferedWriter.Flush()
-		bufferedWriter = MakeBufferedWriter(outStream)
 		outStream = MakeLoggerWriter(bufferedWriter)
 	}
 
