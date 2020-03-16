@@ -13,12 +13,13 @@ import (
 
 // Collector manages and provides container resource stats
 type Collector struct {
-	m          sync.Mutex
-	cond       *sync.Cond
-	supervisor supervisor
-	interval   time.Duration
-	publishers map[*container.Container]*pubsub.Publisher
-	bufReader  *bufio.Reader
+	m          		sync.Mutex
+	cond       		*sync.Cond
+	supervisor 		supervisor
+	interval   		time.Duration
+	channelTimeout	time.Duration
+	publishers 		map[*container.Container]*pubsub.Publisher
+	bufReader  		*bufio.Reader
 
 	// The following fields are not set on Windows currently.
 	clockTicksPerSecond uint64
@@ -27,10 +28,11 @@ type Collector struct {
 // NewCollector creates a stats collector that will poll the supervisor with the specified interval
 func NewCollector(supervisor supervisor, interval time.Duration) *Collector {
 	s := &Collector{
-		interval:   interval,
-		supervisor: supervisor,
-		publishers: make(map[*container.Container]*pubsub.Publisher),
-		bufReader:  bufio.NewReaderSize(nil, 128),
+		interval:   	  interval,
+		channelTimeout:   (interval / time.Duration(4)) * time.Duration(3),
+		supervisor: 	  supervisor,
+		publishers: 	  make(map[*container.Container]*pubsub.Publisher),
+		bufReader:  	  bufio.NewReaderSize(nil, 128),
 	}
 	s.cond = sync.NewCond(&s.m)
 
@@ -53,7 +55,7 @@ func (s *Collector) Collect(c *container.Container) chan interface{} {
 
 	publisher, exists := s.publishers[c]
 	if !exists {
-		publisher = pubsub.NewPublisher(45*time.Millisecond, 1024)
+		publisher = pubsub.NewPublisher(s.channelTimeout, 1024)
 		s.publishers[c] = publisher
 	}
 

@@ -239,12 +239,12 @@ func (daemon *Daemon) containerStart(container *container.Container, checkpoint 
 				Version:   httputils.VersionFromContext(ctx),
 			}
 
-			stat_context, cancel = WithCancel(ctx)
+			stat_context, cancel := context.WithCancel(ctx)
 			daemon.ContainerStats(stat_context, container.ID, config)
 
-			daemon.statsLoggers.WLock()
+			daemon.statsLoggers.Lock()
 			daemon.statsLoggers.m[container.ID] = cancel
-			daemon.statsLoggers.WUnlock()
+			daemon.statsLoggers.Unlock()
 		}
 	}()
 

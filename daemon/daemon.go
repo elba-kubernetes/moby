@@ -79,6 +79,11 @@ var (
 	errSystemNotSupported = errors.New("the Docker daemon is not supported on this platform")
 )
 
+type StatsLoggers struct{
+	sync.RWMutex
+	m				  map[string]context.CancelFunc
+}
+
 // Daemon holds information about the Docker daemon.
 type Daemon struct {
 	ID                string
@@ -128,7 +133,7 @@ type Daemon struct {
 	attachmentStore       network.AttachmentStore
 	attachableNetworkLock *locker.Locker
 
-	statsLoggers	struct{sync.RWMutex,m: map[string]context.CancelFunction}
+	statsLoggers	StatsLoggers
 }
 
 // StoreHosts stores the addresses the daemon is listening on
@@ -1040,8 +1045,8 @@ func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.S
 	} else {
 		statsInterval = config.StatsInterval
 	}
-	d.statsCollector = d.newStatsCollector(statsInterval * time.Millisecond)
-	d.statsLoggers = {m: make(map[string]*context.Context)}
+	d.statsCollector = d.newStatsCollector(time.Duration(statsInterval) * time.Millisecond)
+	d.statsLoggers = StatsLoggers{m: make(map[string]context.CancelFunc)}
 
 	d.EventsService = events.New()
 	d.root = config.Root
