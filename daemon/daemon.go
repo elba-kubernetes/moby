@@ -127,6 +127,8 @@ type Daemon struct {
 
 	attachmentStore       network.AttachmentStore
 	attachableNetworkLock *locker.Locker
+
+	statsLoggers	struct{sync.RWMutex,m: map[string]context.CancelFunction}
 }
 
 // StoreHosts stores the addresses the daemon is listening on
@@ -1031,7 +1033,15 @@ func NewDaemon(ctx context.Context, config *config.Config, pluginStore *plugin.S
 	}
 	d.execCommands = exec.NewStore()
 	d.idIndex = truncindex.NewTruncIndex([]string{})
-	d.statsCollector = d.newStatsCollector(50 * time.Millisecond)
+
+	var statsInterval int
+	if config.StatsInterval <= 0 {
+		statsInterval = 1000
+	} else {
+		statsInterval = config.StatsInterval
+	}
+	d.statsCollector = d.newStatsCollector(statsInterval * time.Millisecond)
+	d.statsLoggers = {m: make(map[string]*context.Context)}
 
 	d.EventsService = events.New()
 	d.root = config.Root

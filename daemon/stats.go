@@ -74,11 +74,10 @@ func MakeLoggerWriter(dest io.Writer) *LoggerWriter {
 func (w *LoggerWriter) Write(p []byte) (int, error) {
 	timeNano := strconv.FormatInt(time.Now().UnixNano(), 10)
 	timeLen := len(timeNano)
-	newBufferLength := timeLen + 2 + len(p) // 2 for space, and newline
+	newBufferLength := timeLen + 1 + len(p) // 1 for space
 	buf := make([]byte, newBufferLength)
 	copy(buf[:], timeNano[:])
 	buf[timeLen] = 32 // space
-	buf[newBufferLength - 1] = 10 // \n
 	copy(buf[timeLen + 1:], p)
 	w.Writer.Write(buf)
 	

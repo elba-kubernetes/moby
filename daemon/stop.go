@@ -85,5 +85,19 @@ func (daemon *Daemon) containerStop(container *containerpkg.Container, seconds i
 	}
 
 	daemon.LogContainerEvent(container, "stop")
+
+	// Cancel stats loggers for the current container
+	daemon.statsLoggers.RLock()
+	if daemon.statsLoggers.m[container.ID] {
+		daemon.statsLoggers.m[container.ID]()
+		daemon.statsLoggers.RUnlock()
+
+		daemon.statsLoggers.WLock()
+		delete(daemon.statsLogger.m, container.ID)
+		daemon.statsLoggers.WUnlock()
+	} else {
+		daemon.statsLoggers.RUnlock()
+	}
+
 	return nil
 }
