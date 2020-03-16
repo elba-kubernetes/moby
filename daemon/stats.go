@@ -17,7 +17,8 @@ import (
 	"github.com/docker/docker/pkg/ioutils"
 )
 
-const BUFFER_LENGTH = 512
+// Lines are ~1700 chars long, so this is ~10 lines at once
+const BUFFER_LENGTH = 16384
 
 type BufferedWriter struct {
 	Buffer		[BUFFER_LENGTH]byte
@@ -63,27 +64,6 @@ func (w *BufferedWriter) Flush() (int, error) {
 	return originalLength, nil
 }
 
-type LoggerWriter struct {
-	Writer	io.Writer
-}
-
-func MakeLoggerWriter(dest io.Writer) *LoggerWriter {
-	return &LoggerWriter{Writer: dest}
-}
-
-func (w *LoggerWriter) Write(p []byte) (int, error) {
-	timeNano := strconv.FormatInt(time.Now().UnixNano(), 10)
-	timeLen := len(timeNano)
-	newBufferLength := timeLen + 1 + len(p) // 1 for space
-	buf := make([]byte, newBufferLength)
-	copy(buf[:], timeNano[:])
-	buf[timeLen] = 32 // space
-	copy(buf[timeLen + 1:], p)
-	w.Writer.Write(buf)
-	
-	return newBufferLength, nil
-}
-
 // ContainerStats writes information about the container to the stream
 // given in the config object.
 func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, config *backend.ContainerStatsConfig) error {
@@ -123,15 +103,14 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 		return &ss
 	}
 
-	// Buffer and add timestamps
+	// Use a buffered writer to batch stream writes
 	if config.Buffer {
 		bufferedWriter := MakeBufferedWriter(outStream)
 		defer bufferedWriter.Flush()
-		outStream = MakeLoggerWriter(bufferedWriter)
+		outStream = bufferedWriter
 	}
 
 	enc := json.NewEncoder(outStream)
-	shouldStream := config.Stream || config.Buffer
 
 	updates := daemon.subscribeToContainerStats(container)
 	defer daemon.unsubscribeToContainerStats(container, updates)
@@ -187,7 +166,7 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 				statsJSON = statsJSONPost120
 			}
 
-			if !shouldStream && noStreamFirstFrame {
+			if !config.Stream && noStreamFirstFrame {
 				// prime the cpu stats so they aren't 0 in the final output
 				noStreamFirstFrame = false
 				continue
@@ -197,7 +176,7 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 				return err
 			}
 
-			if !shouldStream {
+			if !config.Stream {
 				return nil
 			}
 		case <-ctx.Done():

@@ -225,30 +225,45 @@ func (daemon *Daemon) containerStart(container *container.Container, checkpoint 
 	daemon.LogContainerEvent(container, "start")
 	containerActions.WithValues("start").UpdateSince(start)
 	
-	go func() {
-		folderpath := "/var/logs/docker/stats"
-		err := os.MkdirAll(folderpath, os.ModePerm)
-		targetFilepath := filepath.Join(folderpath, container.ID + ".log")
-		file, err := os.OpenFile(targetFilepath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err == nil {
-			defer file.Close()
-			config := &backend.ContainerStatsConfig{
-				Stream:    true,
-				OutStream: file,
-				Buffer:    true,
-				Version:   httputils.VersionFromContext(ctx),
+	// Begin goroutine to log statistics
+	if daemon.ShouldCollectStats(container) {
+		go func() {
+			folderpath := "/var/logs/docker/stats"
+			os.MkdirAll(folderpath, os.ModePerm)
+			targetFilepath := filepath.Join(folderpath, container.ID + ".log")
+	
+			mode := os.O_APPEND|os.O_CREATE|os.O_WRONLY
+			if file, err := os.OpenFile(targetFilepath, mode, 0644); err == nil {
+				// Close file after container stats finishes
+				defer file.Close()
+				
+				config := &backend.ContainerStatsConfig{
+					Stream:    true,
+					// Use the file as the outstream (instead of an http stream)
+					OutStream: file,
+					Buffer:    true,
+					Format:	   ""
+					Version:   httputils.VersionFromContext(ctx),
+				}
+	
+				stat_context, cancel := context.WithCancel(ctx)
+				daemon.statsLoggers.Lock()
+				daemon.statsLoggers.m[container.ID] = cancel
+				daemon.statsLoggers.Unlock()
+	
+				daemon.ContainerStats(stat_context, container.ID, config)
+			} else {
+				logrus.WithError(err).WithField("container", container.ID).Error("Error opening file '%s' for stats logging", targetFilepath)
 			}
-
-			stat_context, cancel := context.WithCancel(ctx)
-			daemon.ContainerStats(stat_context, container.ID, config)
-
-			daemon.statsLoggers.Lock()
-			daemon.statsLoggers.m[container.ID] = cancel
-			daemon.statsLoggers.Unlock()
-		}
-	}()
+		}()
+	}
 
 	return nil
+}
+
+func (daemon *Daemon) ShouldCollectStats(container *container.Container) bool {
+	// TODO investigate discrimination schemas for excluding kube-proxy/kubelet
+	return true
 }
 
 // Cleanup releases any network resources allocated to the container along with any rules
