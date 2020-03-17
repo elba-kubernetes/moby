@@ -3,11 +3,12 @@ package daemon // import "github.com/docker/docker/daemon"
 import (
 	"context"
 	"encoding/json"
+	"encoding/csv"
+	"strconv"
 	"errors"
 	"runtime"
 	"time"
 	"io"
-	"strconv"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/backend"
@@ -110,7 +111,30 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 		outStream = bufferedWriter
 	}
 
-	enc := json.NewEncoder(outStream)
+	var encode func(interface{}) error
+	if config.Format == backend.ContainerStatsFormatCsv {
+		csvEncoder := csv.NewWriter(outStream)
+		defer csvEncoder.Flush()
+		
+		// write the initial header row
+		header := [...]string {"name", "id", "ts", "pre_ts"}
+		csvEncoder.Write(header[:])
+
+		encode = func(s interface{}) error {
+			stats := s.(types.StatsJSON)
+			name := stats.Name
+			id := stats.ID
+			ts := strconv.FormatInt(stats.Read.UnixNano(), 64)
+			pre_ts := strconv.FormatInt(stats.PreRead.UnixNano(), 64)
+			record := [...]string {name, id, ts, pre_ts}
+			return csvEncoder.Write(record[:])
+		}
+	} else {
+		jsonEncoder := json.NewEncoder(outStream)
+		encode = func(stats interface{}) error {
+			return jsonEncoder.Encode(stats)
+		}
+	}
 
 	updates := daemon.subscribeToContainerStats(container)
 	defer daemon.unsubscribeToContainerStats(container, updates)
@@ -121,6 +145,12 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 		case v, ok := <-updates:
 			if !ok {
 				return nil
+			}
+
+			if !config.Stream && noStreamFirstFrame {
+				// prime the cpu stats so they aren't 0 in the final output
+				noStreamFirstFrame = false
+				continue
 			}
 
 			var statsJSON interface{}
@@ -166,13 +196,7 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 				statsJSON = statsJSONPost120
 			}
 
-			if !config.Stream && noStreamFirstFrame {
-				// prime the cpu stats so they aren't 0 in the final output
-				noStreamFirstFrame = false
-				continue
-			}
-
-			if err := enc.Encode(statsJSON); err != nil {
+			if err := encode(statsJSON); err != nil {
 				return err
 			}
 

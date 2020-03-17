@@ -227,7 +227,7 @@ func (daemon *Daemon) containerStart(container *container.Container, checkpoint 
 	
 	// Begin goroutine to log statistics
 	if daemon.ShouldCollectStats(container) {
-		go func() {
+		go func(){
 			folderpath := "/var/logs/docker/stats"
 			os.MkdirAll(folderpath, os.ModePerm)
 			targetFilepath := filepath.Join(folderpath, container.ID + ".log")
@@ -242,7 +242,7 @@ func (daemon *Daemon) containerStart(container *container.Container, checkpoint 
 					// Use the file as the outstream (instead of an http stream)
 					OutStream: file,
 					Buffer:    true,
-					Format:	   ""
+					Format:	   backend.ContainerStatsFormatCsv,
 					Version:   httputils.VersionFromContext(ctx),
 				}
 	

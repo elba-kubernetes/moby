@@ -103,14 +103,30 @@ func (s *containerRouter) getContainersStats(ctx context.Context, w http.Respons
 
 	stream := httputils.BoolValueOrDefault(r, "stream", true)
 	buffer := httputils.BoolValueOrDefault(r, "buffer", false)
+
+	formatStr := r.Form.Get("format")
+	var format backend.ContainerStatsFormat
+	if formatStr == "csv" {
+		format = backend.ContainerStatsFormatCsv
+	} else {
+		format = backend.ContainerStatsFormatJson
+	}
+
 	if !stream {
-		w.Header().Set("Content-Type", "application/json")
+		var mime string
+		if format == backend.ContainerStatsFormatCsv {
+			mime = "text/csv"
+		} else {
+			mime = "application/json"
+		}
+		w.Header().Set("Content-Type", mime)
 	}
 
 	config := &backend.ContainerStatsConfig{
 		Stream:    stream,
 		OutStream: w,
 		Buffer:    buffer,
+		Format:	   format,
 		Version:   httputils.VersionFromContext(ctx),
 	}
 

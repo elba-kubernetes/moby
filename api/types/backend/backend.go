@@ -69,6 +69,13 @@ type LogSelector struct {
 	Tasks    []string
 }
 
+// Mode of output for writing to the stream on a backend.ContainerStats() call
+type ContainerStatsFormat int
+const (
+	ContainerStatsFormatJson ContainerStatsFormat = iota
+	ContainerStatsFormatCsv
+)
+
 // ContainerStatsConfig holds information for configuring the runtime
 // behavior of a backend.ContainerStats() call.
 type ContainerStatsConfig struct {
@@ -76,6 +83,7 @@ type ContainerStatsConfig struct {
 	OutStream io.Writer
 	Version   string
 	Buffer	  bool
+	Format	  ContainerStatsFormat
 }
 
 // ExecInspect holds information about a running process started
