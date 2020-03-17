@@ -2,13 +2,14 @@ package daemon // import "github.com/docker/docker/daemon"
 
 import (
 	"context"
-	"encoding/json"
 	"encoding/csv"
-	"strconv"
+	"encoding/json"
 	"errors"
-	"runtime"
-	"time"
 	"io"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/backend"
@@ -22,10 +23,10 @@ import (
 const BUFFER_LENGTH = 16384
 
 type BufferedWriter struct {
-	Buffer		[BUFFER_LENGTH]byte
-	N			int
-	Size		int
-	Writer		io.Writer
+	Buffer [BUFFER_LENGTH]byte
+	N      int
+	Size   int
+	Writer io.Writer
 }
 
 func MakeBufferedWriter(dest io.Writer) *BufferedWriter {
@@ -36,12 +37,12 @@ func (w *BufferedWriter) Write(p []byte) (int, error) {
 	originalLength := len(p)
 	srcRemaining := originalLength
 	srcStart := 0
-	
+
 	// Keep writing and flushing until remaining can fit
-	for srcRemaining + w.N > w.Size {
+	for srcRemaining+w.N > w.Size {
 		copy(w.Buffer[w.N:w.Size], p[srcStart:])
 		w.Writer.Write(w.Buffer[:])
-		
+
 		// Flush
 		w.Buffer = [BUFFER_LENGTH]byte{}
 		copied := w.Size - w.N
@@ -61,7 +62,7 @@ func (w *BufferedWriter) Flush() (int, error) {
 	w.Writer.Write(w.Buffer[:w.N])
 	w.Buffer = [BUFFER_LENGTH]byte{}
 	w.N = 0
-	
+
 	return originalLength, nil
 }
 
@@ -115,15 +116,15 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 	if config.Format == backend.ContainerStatsFormatCsv {
 		csvEncoder := csv.NewWriter(outStream)
 		defer csvEncoder.Flush()
-		
+
 		// write the initial header row
-		header := [...]string {
+		header := [...]string{
 			"read",
 			"preread",
 			"name",
 			"id",
 			"cpu_stats.cpu_usage.total_usage",
-			"cpu_stats.cpu_usage.percpu_usage", // TODO implement
+			"cpu_stats.cpu_usage.percpu_usage",
 			"cpu_stats.cpu_usage.usage_in_kernelmode",
 			"cpu_stats.cpu_usage.usage_in_usermode",
 			"cpu_stats.system_cpu_usage",
@@ -133,11 +134,11 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 			"cpu_stats.throttling_data.throttled_time",
 			"memory_stats.usage",
 			"memory_stats.max_usage",
-			"memory_stats.stats", // TODO implement
+			"memory_stats.stats",
 			"memory_stats.failcnt",
 			"memory_stats.limit",
-			"pid_stats.current",
-			"pid_stats.limit",
+			"pids_stats.current",
+			"pids_stats.limit",
 			"blkio_stats.io_service_bytes_recursive",
 			"blkio_stats.io_serviced_recursive",
 			"blkio_stats.io_queue_recursive",
@@ -146,28 +147,44 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 			"blkio_stats.io_merged_recursive",
 			"blkio_stats.io_time_recursive",
 			"blkio_stats.sectors_recursive",
-			"networks"
+			"networks",
 		}
 		csvEncoder.Write(header[:])
 
 		encode = func(s interface{}) error {
-			stats := s.(types.StatsJSON)
+			stats := *(s.(*types.StatsJSON))
 
 			read := strconv.FormatInt(stats.Read.UnixNano(), 10)
 			preread := strconv.FormatInt(stats.PreRead.UnixNano(), 10)
 			name := stats.Name
 			id := stats.ID
-			cpu_total := strconv.FormatInt(stats.CPUStats.CPUUsage.TotalUsage, 10)
-			cpu_per_core := strconv.FormatInt(stats.CPUStats.CPUUsage.TotalUsage, 10)
-			cpu_kernel := strconv.FormatInt(stats.CPUStats.CPUUsage.UsageInKernelmode, 10)
-			cpu_user := strconv.FormatInt(stats.CPUStats.CPUUsage.UsageInUsermode, 10)
-			cpu_system := strconv.FormatInt(stats.CPUStats.SystemUsage, 10)
-			cpu_online_cpus := strconv.Itoa(stats.CPUStats.OnlineCPUs)
-			cpu_throttiling_periods := strconv.FormatInt(stats.CPUStats.ThrottlingData.Periods, 10)
-			cpu_throttiling_throttled_periods := strconv.FormatInt(stats.CPUStats.ThrottlingData.ThrottledPeriods, 10)
-			cpu_throttiling_throttled_time := strconv.FormatInt(stats.CPUStats.ThrottlingData.ThrottledTime, 10)
+			cpu_total := strconv.FormatUint(stats.CPUStats.CPUUsage.TotalUsage, 10)
+			cpu_per_core := UintToString(stats.CPUStats.CPUUsage.PercpuUsage, ",")
+			cpu_kernel := strconv.FormatUint(stats.CPUStats.CPUUsage.UsageInKernelmode, 10)
+			cpu_user := strconv.FormatUint(stats.CPUStats.CPUUsage.UsageInUsermode, 10)
+			cpu_system := strconv.FormatUint(stats.CPUStats.SystemUsage, 10)
+			cpu_online_cpus := strconv.FormatUint(uint64(stats.CPUStats.OnlineCPUs), 10)
+			cpu_throttiling_periods := strconv.FormatUint(stats.CPUStats.ThrottlingData.Periods, 10)
+			cpu_throttiling_throttled_periods := strconv.FormatUint(stats.CPUStats.ThrottlingData.ThrottledPeriods, 10)
+			cpu_throttiling_throttled_time := strconv.FormatUint(stats.CPUStats.ThrottlingData.ThrottledTime, 10)
+			memory_usage := strconv.FormatUint(stats.MemoryStats.Usage, 10)
+			memory_max_usage := strconv.FormatUint(stats.MemoryStats.MaxUsage, 10)
+			memory_stats, _ := json.Marshal(stats.MemoryStats.Stats)
+			memory_failcnt := strconv.FormatUint(stats.MemoryStats.Failcnt, 10)
+			memory_limit := strconv.FormatUint(stats.MemoryStats.Limit, 10)
+			pid_current := strconv.FormatUint(stats.PidsStats.Current, 10)
+			pid_limit := strconv.FormatUint(stats.PidsStats.Limit, 10)
+			io_service_bytes_recursive := IoToString(&stats.BlkioStats.IoServiceBytesRecursive)
+			io_serviced_recursive := IoToString(&stats.BlkioStats.IoServicedRecursive)
+			io_queue_recursive := IoToString(&stats.BlkioStats.IoQueuedRecursive)
+			io_service_time_recursive := IoToString(&stats.BlkioStats.IoServiceTimeRecursive)
+			io_wait_time_recursive := IoToString(&stats.BlkioStats.IoWaitTimeRecursive)
+			io_merged_recursive := IoToString(&stats.BlkioStats.IoMergedRecursive)
+			io_time_recursive := IoToString(&stats.BlkioStats.IoTimeRecursive)
+			sectors_recursive := IoToString(&stats.BlkioStats.SectorsRecursive)
+			networks, _ := json.Marshal(stats.Networks)
 
-			record := [...]string {
+			record := [...]string{
 				read,
 				preread,
 				name,
@@ -180,7 +197,23 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 				cpu_online_cpus,
 				cpu_throttiling_periods,
 				cpu_throttiling_throttled_periods,
-				cpu_throttiling_throttled_time
+				cpu_throttiling_throttled_time,
+				memory_usage,
+				memory_max_usage,
+				string(memory_stats),
+				memory_failcnt,
+				memory_limit,
+				pid_current,
+				pid_limit,
+				io_service_bytes_recursive,
+				io_serviced_recursive,
+				io_queue_recursive,
+				io_service_time_recursive,
+				io_wait_time_recursive,
+				io_merged_recursive,
+				io_time_recursive,
+				sectors_recursive,
+				string(networks),
 			}
 			return csvEncoder.Write(record[:])
 		}
@@ -264,16 +297,42 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 	}
 }
 
-func (a *[]uint64) ToString(sep string) string {
-    if len(a) == 0 {
-        return ""
-    }
+func UintToString(a []uint64, sep string) string {
+	if len(a) == 0 {
+		return ""
+	}
 
-    b := make([]string, len(a))
-    for i, v := range a {
-        b[i] = strconv.Itoa(v)
-    }
-    return strings.Join(b, sep)
+	var str strings.Builder
+	last := len(a) - 1
+	for i, v := range a {
+		str.WriteString(strconv.FormatUint(v, 10))
+		if i != last {
+			str.WriteString(sep)
+		}
+	}
+	return str.String()
+}
+
+func IoToString(a *[]types.BlkioStatEntry) string {
+	if len(*a) == 0 {
+		return ""
+	}
+
+	var str strings.Builder
+	last := len(*a) - 1
+	for i, v := range *a {
+		str.WriteString(strconv.FormatUint(v.Major, 10))
+		str.WriteRune(' ')
+		str.WriteString(strconv.FormatUint(v.Minor, 10))
+		str.WriteRune(' ')
+		str.WriteString(strconv.FormatUint(v.Value, 10))
+		str.WriteRune(' ')
+		str.WriteString(v.Op)
+		if i != last {
+			str.WriteRune(',')
+		}
+	}
+	return str.String()
 }
 
 func (daemon *Daemon) subscribeToContainerStats(c *container.Container) chan interface{} {

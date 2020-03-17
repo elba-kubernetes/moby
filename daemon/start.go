@@ -2,15 +2,15 @@ package daemon // import "github.com/docker/docker/daemon"
 
 import (
 	"context"
-	"runtime"
-	"time"
 	"os"
 	"path/filepath"
+	"runtime"
+	"time"
 
+	"github.com/docker/docker/api/server/httputils"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/backend"
 	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/server/httputils"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/mount"
@@ -224,36 +224,36 @@ func (daemon *Daemon) containerStart(container *container.Container, checkpoint 
 
 	daemon.LogContainerEvent(container, "start")
 	containerActions.WithValues("start").UpdateSince(start)
-	
+
 	// Begin goroutine to log statistics
 	if daemon.ShouldCollectStats(container) {
-		go func(){
+		go func() {
 			folderpath := "/var/logs/docker/stats"
 			os.MkdirAll(folderpath, os.ModePerm)
-			targetFilepath := filepath.Join(folderpath, container.ID + ".log")
-	
-			mode := os.O_APPEND|os.O_CREATE|os.O_WRONLY
+			targetFilepath := filepath.Join(folderpath, container.ID+".log")
+
+			mode := os.O_APPEND | os.O_CREATE | os.O_WRONLY
 			if file, err := os.OpenFile(targetFilepath, mode, 0644); err == nil {
 				// Close file after container stats finishes
 				defer file.Close()
-				
+
 				config := &backend.ContainerStatsConfig{
-					Stream:    true,
+					Stream: true,
 					// Use the file as the outstream (instead of an http stream)
 					OutStream: file,
 					Buffer:    true,
-					Format:	   backend.ContainerStatsFormatCsv,
+					Format:    backend.ContainerStatsFormatCsv,
 					Version:   httputils.VersionFromContext(ctx),
 				}
-	
+
 				stat_context, cancel := context.WithCancel(ctx)
 				daemon.statsLoggers.Lock()
 				daemon.statsLoggers.m[container.ID] = cancel
 				daemon.statsLoggers.Unlock()
-	
+
 				daemon.ContainerStats(stat_context, container.ID, config)
 			} else {
-				logrus.WithError(err).WithField("container", container.ID).Error("Error opening file '%s' for stats logging", targetFilepath)
+				logrus.WithError(err).WithField("container", container.ID).Errorf("Error opening file '%s' for stats logging", targetFilepath)
 			}
 		}()
 	}
