@@ -117,16 +117,71 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 		defer csvEncoder.Flush()
 		
 		// write the initial header row
-		header := [...]string {"name", "id", "ts", "pre_ts"}
+		header := [...]string {
+			"read",
+			"preread",
+			"name",
+			"id",
+			"cpu_stats.cpu_usage.total_usage",
+			"cpu_stats.cpu_usage.percpu_usage", // TODO implement
+			"cpu_stats.cpu_usage.usage_in_kernelmode",
+			"cpu_stats.cpu_usage.usage_in_usermode",
+			"cpu_stats.system_cpu_usage",
+			"cpu_stats.online_cpus",
+			"cpu_stats.throttling_data.periods",
+			"cpu_stats.throttling_data.throttled_periods",
+			"cpu_stats.throttling_data.throttled_time",
+			"memory_stats.usage",
+			"memory_stats.max_usage",
+			"memory_stats.stats", // TODO implement
+			"memory_stats.failcnt",
+			"memory_stats.limit",
+			"pid_stats.current",
+			"pid_stats.limit",
+			"blkio_stats.io_service_bytes_recursive",
+			"blkio_stats.io_serviced_recursive",
+			"blkio_stats.io_queue_recursive",
+			"blkio_stats.io_service_time_recursive",
+			"blkio_stats.io_wait_time_recursive",
+			"blkio_stats.io_merged_recursive",
+			"blkio_stats.io_time_recursive",
+			"blkio_stats.sectors_recursive",
+			"networks"
+		}
 		csvEncoder.Write(header[:])
 
 		encode = func(s interface{}) error {
 			stats := s.(types.StatsJSON)
+
+			read := strconv.FormatInt(stats.Read.UnixNano(), 10)
+			preread := strconv.FormatInt(stats.PreRead.UnixNano(), 10)
 			name := stats.Name
 			id := stats.ID
-			ts := strconv.FormatInt(stats.Read.UnixNano(), 64)
-			pre_ts := strconv.FormatInt(stats.PreRead.UnixNano(), 64)
-			record := [...]string {name, id, ts, pre_ts}
+			cpu_total := strconv.FormatInt(stats.CPUStats.CPUUsage.TotalUsage, 10)
+			cpu_per_core := strconv.FormatInt(stats.CPUStats.CPUUsage.TotalUsage, 10)
+			cpu_kernel := strconv.FormatInt(stats.CPUStats.CPUUsage.UsageInKernelmode, 10)
+			cpu_user := strconv.FormatInt(stats.CPUStats.CPUUsage.UsageInUsermode, 10)
+			cpu_system := strconv.FormatInt(stats.CPUStats.SystemUsage, 10)
+			cpu_online_cpus := strconv.Itoa(stats.CPUStats.OnlineCPUs)
+			cpu_throttiling_periods := strconv.FormatInt(stats.CPUStats.ThrottlingData.Periods, 10)
+			cpu_throttiling_throttled_periods := strconv.FormatInt(stats.CPUStats.ThrottlingData.ThrottledPeriods, 10)
+			cpu_throttiling_throttled_time := strconv.FormatInt(stats.CPUStats.ThrottlingData.ThrottledTime, 10)
+
+			record := [...]string {
+				read,
+				preread,
+				name,
+				id,
+				cpu_total,
+				cpu_per_core,
+				cpu_kernel,
+				cpu_user,
+				cpu_system,
+				cpu_online_cpus,
+				cpu_throttiling_periods,
+				cpu_throttiling_throttled_periods,
+				cpu_throttiling_throttled_time
+			}
 			return csvEncoder.Write(record[:])
 		}
 	} else {
@@ -207,6 +262,18 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 			return nil
 		}
 	}
+}
+
+func (a *[]uint64) ToString(sep string) string {
+    if len(a) == 0 {
+        return ""
+    }
+
+    b := make([]string, len(a))
+    for i, v := range a {
+        b[i] = strconv.Itoa(v)
+    }
+    return strings.Join(b, sep)
 }
 
 func (daemon *Daemon) subscribeToContainerStats(c *container.Container) chan interface{} {
