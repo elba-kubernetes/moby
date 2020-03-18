@@ -411,8 +411,10 @@ func mapStringUint64ToString(m *map[string]uint64) string {
 	var str strings.Builder
 	str.WriteRune('{')
 	for key, element := range *m {
+		str.WriteRune('"')
+		// Assumes that keys don't contain double quotes
 		str.WriteString(key)
-		str.WriteRune(':')
+		str.WriteString("\":")
 		str.WriteString(strconv.FormatUint(element, 10))
 		str.WriteRune(',')
 	}
@@ -446,8 +448,10 @@ func networkStatsToString(n *map[string]types.NetworkStats) string {
 	var str strings.Builder
 	str.WriteRune('{')
 	for key, element := range *n {
+		str.WriteRune('"')
+		// Assumes that keys don't contain double quotes
 		str.WriteString(key)
-		str.WriteString(":\"")
+		str.WriteString("\":\"")
 		writeNetworkStats(&element, &str)
 		str.WriteString("\",")
 	}
