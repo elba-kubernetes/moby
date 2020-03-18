@@ -6,64 +6,78 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/docker/docker/api"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/backend"
 	"github.com/docker/docker/api/types/versions"
 	"github.com/docker/docker/api/types/versions/v1p20"
 	"github.com/docker/docker/container"
 	"github.com/docker/docker/pkg/ioutils"
+	"github.com/sirupsen/logrus"
 )
 
-// Lines are ~1700 chars long, so this is ~10 lines at once
+// Lines are ~1200 chars long, so this is ~14 lines at once
 const BUFFER_LENGTH = 16384
 
-type BufferedWriter struct {
-	Buffer [BUFFER_LENGTH]byte
-	N      int
-	Size   int
-	Writer io.Writer
+func (daemon *Daemon) ShouldCollectStats(container *container.Container) bool {
+	// TODO investigate discrimination schemas for excluding kube-proxy/kubelet
+	return true
 }
 
-func MakeBufferedWriter(dest io.Writer) *BufferedWriter {
-	return &BufferedWriter{Writer: dest, Size: BUFFER_LENGTH}
-}
+func (daemon *Daemon) StopStatsLogs(container *container.Container) {
+	daemon.statsLoggers.RLock()
+	if cancel, ok := daemon.statsLoggers.m[container.ID]; ok {
+		cancel()
+		daemon.statsLoggers.RUnlock()
 
-func (w *BufferedWriter) Write(p []byte) (int, error) {
-	originalLength := len(p)
-	srcRemaining := originalLength
-	srcStart := 0
+		logrus.Debugf("Stopped collecing stats for container %s", container.Name)
 
-	// Keep writing and flushing until remaining can fit
-	for srcRemaining+w.N > w.Size {
-		copy(w.Buffer[w.N:w.Size], p[srcStart:])
-		w.Writer.Write(w.Buffer[:])
-
-		// Flush
-		w.Buffer = [BUFFER_LENGTH]byte{}
-		copied := w.Size - w.N
-		srcRemaining -= copied
-		srcStart += copied
-		w.N = 0
+		daemon.statsLoggers.Lock()
+		delete(daemon.statsLoggers.m, container.ID)
+		daemon.statsLoggers.Unlock()
+	} else {
+		daemon.statsLoggers.RUnlock()
 	}
-
-	copy(w.Buffer[w.N:], p[srcStart:srcStart+srcRemaining])
-	w.N += srcRemaining
-
-	return originalLength, nil
 }
 
-func (w *BufferedWriter) Flush() (int, error) {
-	originalLength := w.N
-	w.Writer.Write(w.Buffer[:w.N])
-	w.Buffer = [BUFFER_LENGTH]byte{}
-	w.N = 0
+func (daemon *Daemon) StartStatsLogs(container *container.Container) {
+	folderpath := "/var/logs/docker/stats"
+	os.MkdirAll(folderpath, os.ModePerm)
+	targetFilepath := filepath.Join(folderpath, container.ID+".log")
 
-	return originalLength, nil
+	mode := os.O_APPEND | os.O_CREATE | os.O_WRONLY
+	if file, err := os.OpenFile(targetFilepath, mode, 0644); err == nil {
+		// Close file after container stats finishes
+		defer file.Close()
+
+		config := &backend.ContainerStatsConfig{
+			Stream: true,
+			// Use the file as the outstream (instead of an http stream)
+			OutStream: file,
+			Buffer:    true,
+			Format:    backend.ContainerStatsFormatCsv,
+			Version:   api.DefaultVersion,
+		}
+
+		logrus.Debugf("Collecing stats for container %s at a %dms interval in %s",
+			container.Name, daemon.configStore.StatsInterval, targetFilepath)
+
+		stat_context, cancel := context.WithCancel(context.Background())
+		daemon.statsLoggers.Lock()
+		daemon.statsLoggers.m[container.ID] = cancel
+		daemon.statsLoggers.Unlock()
+
+		daemon.ContainerStats(stat_context, container.ID, config)
+	} else {
+		logrus.WithError(err).WithField("container", container.ID).Errorf("Error opening file '%s' for stats logging", targetFilepath)
+	}
 }
 
 // ContainerStats writes information about the container to the stream
@@ -114,10 +128,16 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 
 	var encode func(interface{}) error
 	if config.Format == backend.ContainerStatsFormatCsv {
+		if versions.LessThan(apiVersion, "1.21") {
+			return errors.New("API versions pre v1.21 do not support writing to CSV")
+		}
+
 		csvEncoder := csv.NewWriter(outStream)
 		defer csvEncoder.Flush()
 
 		// write the initial header row
+		// Note: important to be in exactly the same order as the encode function
+		//       below writes it
 		header := [...]string{
 			"read",
 			"preread",
@@ -137,8 +157,16 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 			"memory_stats.stats",
 			"memory_stats.failcnt",
 			"memory_stats.limit",
+			"memory_stats.commitbytes",
+			"memory_stats.commitpeakbytes",
+			"memory_stats.privateworkingset",
 			"pids_stats.current",
 			"pids_stats.limit",
+			"num_procs",
+			"storage_stats.read_count_normalized",
+			"storage_stats.read_size_bytes",
+			"storage_stats.write_count_normalized",
+			"storage_stats.write_size_bytes",
 			"blkio_stats.io_service_bytes_recursive",
 			"blkio_stats.io_serviced_recursive",
 			"blkio_stats.io_queue_recursive",
@@ -153,68 +181,46 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 
 		encode = func(s interface{}) error {
 			stats := *(s.(*types.StatsJSON))
-
-			read := strconv.FormatInt(stats.Read.UnixNano(), 10)
-			preread := strconv.FormatInt(stats.PreRead.UnixNano(), 10)
-			name := stats.Name
-			id := stats.ID
-			cpu_total := strconv.FormatUint(stats.CPUStats.CPUUsage.TotalUsage, 10)
-			cpu_per_core := UintToString(stats.CPUStats.CPUUsage.PercpuUsage, ",")
-			cpu_kernel := strconv.FormatUint(stats.CPUStats.CPUUsage.UsageInKernelmode, 10)
-			cpu_user := strconv.FormatUint(stats.CPUStats.CPUUsage.UsageInUsermode, 10)
-			cpu_system := strconv.FormatUint(stats.CPUStats.SystemUsage, 10)
-			cpu_online_cpus := strconv.FormatUint(uint64(stats.CPUStats.OnlineCPUs), 10)
-			cpu_throttiling_periods := strconv.FormatUint(stats.CPUStats.ThrottlingData.Periods, 10)
-			cpu_throttiling_throttled_periods := strconv.FormatUint(stats.CPUStats.ThrottlingData.ThrottledPeriods, 10)
-			cpu_throttiling_throttled_time := strconv.FormatUint(stats.CPUStats.ThrottlingData.ThrottledTime, 10)
-			memory_usage := strconv.FormatUint(stats.MemoryStats.Usage, 10)
-			memory_max_usage := strconv.FormatUint(stats.MemoryStats.MaxUsage, 10)
-			memory_stats, _ := json.Marshal(stats.MemoryStats.Stats)
-			memory_failcnt := strconv.FormatUint(stats.MemoryStats.Failcnt, 10)
-			memory_limit := strconv.FormatUint(stats.MemoryStats.Limit, 10)
-			pid_current := strconv.FormatUint(stats.PidsStats.Current, 10)
-			pid_limit := strconv.FormatUint(stats.PidsStats.Limit, 10)
-			io_service_bytes_recursive := IoToString(&stats.BlkioStats.IoServiceBytesRecursive)
-			io_serviced_recursive := IoToString(&stats.BlkioStats.IoServicedRecursive)
-			io_queue_recursive := IoToString(&stats.BlkioStats.IoQueuedRecursive)
-			io_service_time_recursive := IoToString(&stats.BlkioStats.IoServiceTimeRecursive)
-			io_wait_time_recursive := IoToString(&stats.BlkioStats.IoWaitTimeRecursive)
-			io_merged_recursive := IoToString(&stats.BlkioStats.IoMergedRecursive)
-			io_time_recursive := IoToString(&stats.BlkioStats.IoTimeRecursive)
-			sectors_recursive := IoToString(&stats.BlkioStats.SectorsRecursive)
-			networks, _ := json.Marshal(stats.Networks)
-
 			record := [...]string{
-				read,
-				preread,
-				name,
-				id,
-				cpu_total,
-				cpu_per_core,
-				cpu_kernel,
-				cpu_user,
-				cpu_system,
-				cpu_online_cpus,
-				cpu_throttiling_periods,
-				cpu_throttiling_throttled_periods,
-				cpu_throttiling_throttled_time,
-				memory_usage,
-				memory_max_usage,
-				string(memory_stats),
-				memory_failcnt,
-				memory_limit,
-				pid_current,
-				pid_limit,
-				io_service_bytes_recursive,
-				io_serviced_recursive,
-				io_queue_recursive,
-				io_service_time_recursive,
-				io_wait_time_recursive,
-				io_merged_recursive,
-				io_time_recursive,
-				sectors_recursive,
-				string(networks),
+				int64ToString(stats.Read.UnixNano()),
+				int64ToString(stats.PreRead.UnixNano()),
+				stats.Name,
+				stats.ID,
+				uint64ToString(stats.CPUStats.CPUUsage.TotalUsage),
+				uint64ArrayToString(stats.CPUStats.CPUUsage.PercpuUsage),
+				uint64ToString(stats.CPUStats.CPUUsage.UsageInKernelmode),
+				uint64ToString(stats.CPUStats.CPUUsage.UsageInUsermode),
+				uint64ToString(stats.CPUStats.SystemUsage),
+				uint32ToString(stats.CPUStats.OnlineCPUs),
+				uint64ToString(stats.CPUStats.ThrottlingData.Periods),
+				uint64ToString(stats.CPUStats.ThrottlingData.ThrottledPeriods),
+				uint64ToString(stats.CPUStats.ThrottlingData.ThrottledTime),
+				uint64ToString(stats.MemoryStats.Usage),
+				uint64ToString(stats.MemoryStats.MaxUsage),
+				mapStringUint64ToString(&stats.MemoryStats.Stats),
+				uint64ToString(stats.MemoryStats.Failcnt),
+				uint64ToString(stats.MemoryStats.Limit),
+				uint64ToString(stats.MemoryStats.Commit),
+				uint64ToString(stats.MemoryStats.CommitPeak),
+				uint64ToString(stats.MemoryStats.PrivateWorkingSet),
+				uint64ToString(stats.PidsStats.Current),
+				uint64ToString(stats.PidsStats.Limit),
+				uint32ToString(stats.NumProcs),
+				uint64ToString(stats.StorageStats.ReadCountNormalized),
+				uint64ToString(stats.StorageStats.ReadSizeBytes),
+				uint64ToString(stats.StorageStats.WriteCountNormalized),
+				uint64ToString(stats.StorageStats.WriteSizeBytes),
+				blkioArrayToString(&stats.BlkioStats.IoServiceBytesRecursive),
+				blkioArrayToString(&stats.BlkioStats.IoServicedRecursive),
+				blkioArrayToString(&stats.BlkioStats.IoQueuedRecursive),
+				blkioArrayToString(&stats.BlkioStats.IoServiceTimeRecursive),
+				blkioArrayToString(&stats.BlkioStats.IoWaitTimeRecursive),
+				blkioArrayToString(&stats.BlkioStats.IoMergedRecursive),
+				blkioArrayToString(&stats.BlkioStats.IoTimeRecursive),
+				blkioArrayToString(&stats.BlkioStats.SectorsRecursive),
+				networkStatsToString(&stats.Networks),
 			}
+
 			return csvEncoder.Write(record[:])
 		}
 	} else {
@@ -297,44 +303,6 @@ func (daemon *Daemon) ContainerStats(ctx context.Context, prefixOrName string, c
 	}
 }
 
-func UintToString(a []uint64, sep string) string {
-	if len(a) == 0 {
-		return ""
-	}
-
-	var str strings.Builder
-	last := len(a) - 1
-	for i, v := range a {
-		str.WriteString(strconv.FormatUint(v, 10))
-		if i != last {
-			str.WriteString(sep)
-		}
-	}
-	return str.String()
-}
-
-func IoToString(a *[]types.BlkioStatEntry) string {
-	if len(*a) == 0 {
-		return ""
-	}
-
-	var str strings.Builder
-	last := len(*a) - 1
-	for i, v := range *a {
-		str.WriteString(strconv.FormatUint(v.Major, 10))
-		str.WriteRune(' ')
-		str.WriteString(strconv.FormatUint(v.Minor, 10))
-		str.WriteRune(' ')
-		str.WriteString(strconv.FormatUint(v.Value, 10))
-		str.WriteRune(' ')
-		str.WriteString(v.Op)
-		if i != last {
-			str.WriteRune(',')
-		}
-	}
-	return str.String()
-}
-
 func (daemon *Daemon) subscribeToContainerStats(c *container.Container) chan interface{} {
 	return daemon.statsCollector.Collect(c)
 }
@@ -358,4 +326,149 @@ func (daemon *Daemon) GetContainerStats(container *container.Container) (*types.
 	}
 
 	return stats, nil
+}
+
+// io.Writer that includes a large buffer and only writes once the buffer is full,
+// or upon a call to writer.Flush(). Useful in the modifications for batching CSV writes
+// to a file to reduce I/O overhead and instead write in memory
+type BufferedWriter struct {
+	Buffer [BUFFER_LENGTH]byte
+	N      int
+	Size   int
+	Writer io.Writer
+}
+
+func MakeBufferedWriter(dest io.Writer) *BufferedWriter {
+	return &BufferedWriter{Writer: dest, Size: BUFFER_LENGTH}
+}
+
+func (w *BufferedWriter) Write(p []byte) (int, error) {
+	originalLength := len(p)
+	srcRemaining := originalLength
+	srcStart := 0
+
+	// Keep writing and flushing until remaining can fit
+	for srcRemaining+w.N > w.Size {
+		copy(w.Buffer[w.N:w.Size], p[srcStart:])
+		w.Writer.Write(w.Buffer[:])
+
+		// Flush
+		w.Buffer = [BUFFER_LENGTH]byte{}
+		copied := w.Size - w.N
+		srcRemaining -= copied
+		srcStart += copied
+		w.N = 0
+	}
+
+	copy(w.Buffer[w.N:], p[srcStart:srcStart+srcRemaining])
+	w.N += srcRemaining
+
+	return originalLength, nil
+}
+
+func (w *BufferedWriter) Flush() (int, error) {
+	originalLength := w.N
+	w.Writer.Write(w.Buffer[:w.N])
+	w.Buffer = [BUFFER_LENGTH]byte{}
+	w.N = 0
+
+	return originalLength, nil
+}
+
+// ? =====================================================
+// ? Utility ToString functions for generating CSV records
+// ? =====================================================
+
+func uint64ToString(u uint64) string {
+	return strconv.FormatUint(u, 10)
+}
+
+func int64ToString(i int64) string {
+	return strconv.FormatInt(i, 10)
+}
+
+func uint32ToString(u uint32) string {
+	return uint64ToString(uint64(u))
+}
+
+func uint64ArrayToString(a []uint64) string {
+	if len(a) == 0 {
+		return ""
+	}
+
+	var str strings.Builder
+	last := len(a) - 1
+	for i, v := range a {
+		str.WriteString(strconv.FormatUint(v, 10))
+		if i != last {
+			str.WriteRune(',')
+		}
+	}
+	return str.String()
+}
+
+func mapStringUint64ToString(m *map[string]uint64) string {
+	var str strings.Builder
+	str.WriteRune('{')
+	for key, element := range *m {
+		str.WriteString(key)
+		str.WriteRune(':')
+		str.WriteString(strconv.FormatUint(element, 10))
+		str.WriteRune(',')
+	}
+	str.WriteRune('}')
+	return str.String()
+}
+
+func blkioArrayToString(a *[]types.BlkioStatEntry) string {
+	if len(*a) == 0 {
+		return ""
+	}
+
+	var str strings.Builder
+	last := len(*a) - 1
+	for i, v := range *a {
+		str.WriteString(strconv.FormatUint(v.Major, 10))
+		str.WriteRune(' ')
+		str.WriteString(strconv.FormatUint(v.Minor, 10))
+		str.WriteRune(' ')
+		str.WriteString(strconv.FormatUint(v.Value, 10))
+		str.WriteRune(' ')
+		str.WriteString(v.Op)
+		if i != last {
+			str.WriteRune(',')
+		}
+	}
+	return str.String()
+}
+
+func networkStatsToString(n *map[string]types.NetworkStats) string {
+	var str strings.Builder
+	str.WriteRune('{')
+	for key, element := range *n {
+		str.WriteString(key)
+		str.WriteString(":\"")
+		writeNetworkStats(&element, &str)
+		str.WriteString("\",")
+	}
+	str.WriteRune('}')
+	return str.String()
+}
+
+func writeNetworkStats(n *types.NetworkStats, str *strings.Builder) {
+	str.WriteString(strconv.FormatUint(n.RxBytes, 10))
+	str.WriteRune(' ')
+	str.WriteString(strconv.FormatUint(n.RxPackets, 10))
+	str.WriteRune(' ')
+	str.WriteString(strconv.FormatUint(n.RxErrors, 10))
+	str.WriteRune(' ')
+	str.WriteString(strconv.FormatUint(n.RxDropped, 10))
+	str.WriteRune('|')
+	str.WriteString(strconv.FormatUint(n.TxBytes, 10))
+	str.WriteRune(' ')
+	str.WriteString(strconv.FormatUint(n.TxPackets, 10))
+	str.WriteRune(' ')
+	str.WriteString(strconv.FormatUint(n.TxErrors, 10))
+	str.WriteRune(' ')
+	str.WriteString(strconv.FormatUint(n.TxDropped, 10))
 }

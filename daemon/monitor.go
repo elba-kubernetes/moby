@@ -80,6 +80,7 @@ func (daemon *Daemon) ProcessEvent(id string, e libcontainerdtypes.EventType, ei
 			// cancel healthcheck here, they will be automatically
 			// restarted if/when the container is started again
 			daemon.stopHealthchecks(c)
+			daemon.StopStatsLogs(c)
 			attributes := map[string]string{
 				"exitCode": strconv.Itoa(int(ei.ExitCode)),
 			}
