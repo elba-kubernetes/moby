@@ -410,13 +410,18 @@ func uint64ArrayToString(a []uint64) string {
 func mapStringUint64ToString(m *map[string]uint64) string {
 	var str strings.Builder
 	str.WriteRune('{')
+	last := len(*m) - 1
+	i := 0
 	for key, element := range *m {
 		str.WriteRune('"')
 		// Assumes that keys don't contain double quotes
 		str.WriteString(key)
 		str.WriteString("\":")
 		str.WriteString(strconv.FormatUint(element, 10))
-		str.WriteRune(',')
+		if i != last {
+			str.WriteRune(',')
+		}
+		i++
 	}
 	str.WriteRune('}')
 	return str.String()
@@ -447,13 +452,19 @@ func blkioArrayToString(a *[]types.BlkioStatEntry) string {
 func networkStatsToString(n *map[string]types.NetworkStats) string {
 	var str strings.Builder
 	str.WriteRune('{')
+	last := len(*n) - 1
+	i := 0
 	for key, element := range *n {
 		str.WriteRune('"')
 		// Assumes that keys don't contain double quotes
 		str.WriteString(key)
 		str.WriteString("\":\"")
 		writeNetworkStats(&element, &str)
-		str.WriteString("\",")
+		str.WriteRune('"')
+		if i != last {
+			str.WriteRune(',')
+		}
+		i++
 	}
 	str.WriteRune('}')
 	return str.String()
