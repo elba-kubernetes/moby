@@ -126,7 +126,7 @@ func (s *containerRouter) getContainersStats(ctx context.Context, w http.Respons
 		Stream:    stream,
 		OutStream: w,
 		Buffer:    buffer,
-		Format:	   format,
+		Format:    format,
 		Version:   httputils.VersionFromContext(ctx),
 	}
 

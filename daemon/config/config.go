@@ -139,7 +139,7 @@ type CommonConfig struct {
 	ExecRoot              string                    `json:"exec-root,omitempty"`
 	SocketGroup           string                    `json:"group,omitempty"`
 	CorsHeaders           string                    `json:"api-cors-header,omitempty"`
-	StatsInterval		  int						`json:"stats-interval,omitempty"`
+	StatsInterval         int                       `json:"stats-interval,omitempty"`
 
 	// TrustKeyPath is used to generate the daemon ID and for signing schema 1 manifests
 	// when pushing to a registry which does not support schema 2. This field is marked as

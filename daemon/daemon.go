@@ -79,9 +79,9 @@ var (
 	errSystemNotSupported = errors.New("the Docker daemon is not supported on this platform")
 )
 
-type StatsLoggers struct{
+type StatsLoggers struct {
 	sync.RWMutex
-	m				  map[string]context.CancelFunc
+	m map[string]context.CancelFunc
 }
 
 // Daemon holds information about the Docker daemon.
@@ -133,7 +133,7 @@ type Daemon struct {
 	attachmentStore       network.AttachmentStore
 	attachableNetworkLock *locker.Locker
 
-	statsLoggers	StatsLoggers
+	statsLoggers StatsLoggers
 }
 
 // StoreHosts stores the addresses the daemon is listening on
