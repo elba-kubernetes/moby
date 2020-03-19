@@ -29,6 +29,9 @@ KillMode=process
 Restart=on-failure
 StartLimitBurst=3
 StartLimitInterval=60s
+# make daemon have high priority to retain consistent monitoring interval during
+# extreme resource contention
+Nice=-15
 
 [Install]
 WantedBy=multi-user.target
